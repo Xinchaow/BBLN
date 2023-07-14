@@ -1,2 +1,2 @@
 # BBLN
-STRING dataset and GO data cannot be directly uploaded, we are currently creating a download link.
+The first version of the code file (runnable), will be updated with more standardized code files.
