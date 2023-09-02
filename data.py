@@ -38,6 +38,7 @@ def embed_normal(seq, dim, max_len):
     padd_mask_pytorch[0: max_len] = False
     return seq, padd_mask_pytorch
 
+
 class DATA:
     def __init__(self, ppi_path, exclude_protein_path=None, max_len=2000, skip_head=True, p1_index=0, p2_index=1,
                  label_index=2, graph_undirection=True, bigger_ppi_path=None):
@@ -55,7 +56,7 @@ class DATA:
         # maxlen = 0
         self.node_num = 0
         self.edge_num = 0
-        # 去除exclude_protein_path里的蛋白质
+
         if exclude_protein_path != None:
             with open(exclude_protein_path, 'r') as f:
                 ex_protein = json.load(f)
@@ -76,13 +77,9 @@ class DATA:
 
             if line[p1_index] in ex_protein.keys() or line[p2_index] in ex_protein.keys():
                 continue
-                
-            # or
+
             if line[p1_index] not in tfprotdict.keys() or line[p2_index] not in tfprotdict.keys():
                 continue
-            # and
-            # if line[p1_index] not in tfprotdict.keys() and line[p2_index] not in tfprotdict.keys():
-              #   continue
 
             # get node and node name
             if line[p1_index] not in self.protein_name.keys():
@@ -119,13 +116,9 @@ class DATA:
                     skip_head = False
                     continue
                 line = line.strip().split('\t')
-                
-                # or
+
                 if line[p1_index] not in tfprotdict.keys() or line[p2_index] not in tfprotdict.keys():
                     continue
-                # and
-                # if line[p1_index] not in tfprotdict.keys() and line[p2_index] not in tfprotdict.keys():
-                  #   continue
 
                 if line[p1_index] not in self.protein_name.keys():
                     self.protein_name[line[p1_index]] = name
@@ -173,7 +166,6 @@ class DATA:
             self.ppi_list[i][0] = self.protein_name[seq1_name]
             self.ppi_list[i][1] = self.protein_name[seq2_name]
 
-
         # 无向图
         if graph_undirection:
             for i in tqdm(range(ppi_num)):
@@ -192,8 +184,6 @@ class DATA:
                 self.prot_go_emb[p_name] = [[0 for i in range(64)]]
             else:
                 self.prot_go_emb[p_name] = protein_go_emb[p_name]
-                
-            
 
         maxlen = 0
         for p_name in self.prot_go_emb.keys():
@@ -207,14 +197,9 @@ class DATA:
             self.prot_go_emb[p_name] = emb
             self.prot_go_mask[p_name] = emb_mask
 
-
-
-
-
     # 获取蛋白质序列
     def get_protein_aac(self, pseq_path):
         # aac: amino acid sequences
-
         self.pseq_path = pseq_path
         self.pseq_dict = {}  # 各个蛋白质的氨基酸序列字典: "蛋白质名":"ANDSSA..."
         self.protein_len = []
@@ -272,46 +257,6 @@ class DATA:
         for name in tqdm(self.protein_name.keys()):
             self.protein_dict[name] = self.pvec_dict[name]
 
-    def get_pasa(self, asa_path):
-        f_read = open(asa_path, 'rb')
-        pasa = pickle.load(f_read)
-        self.pasa_dict = {}
-        for p_name in tqdm(pasa.keys()):
-            temp_seq = pasa[p_name]
-            temp_asa = []
-            for acid_asa in temp_seq:
-                temp_asa.append([acid_asa])
-            temp_asa = np.array(temp_asa)
-            temp_asa = self.embed_normal(temp_asa, 1)
-            self.pasa_dict[p_name] = temp_asa
-
-    def get_local_feature(self, window_size):
-        i = 0
-        for name in tqdm(self.protein_name):
-            assert self.protein_name[name] == i
-            temp_protein = self.protein_dict[name]
-            temp_plen = len(temp_protein)
-            temp_protein_lf = []
-            for j in range(temp_plen):
-                win_start = j - window_size
-                win_end = j + window_size
-                data = []
-                while win_start < 0:
-                    acid_one_hot = [0 for i in range(13)]
-                    data.extend(acid_one_hot)
-                    win_start += 1
-                valid_end = min(win_end, temp_plen - 1)
-                while win_start <= valid_end:
-                    data.extend(temp_protein[win_start])
-                    win_start += 1
-                while win_start <= win_end:
-                    acid_one_hot = [0 for i in range(13)]
-                    data.extend(acid_one_hot)
-                    win_start += 1
-                temp_protein_lf.append(data)
-            self.local_dict[name] = temp_protein_lf
-            i += 1
-
     def get_connected_num(self):
         self.ufs = UnionFindSet(self.node_num)
         ppi_ndary = np.array(self.ppi_list)
@@ -336,11 +281,8 @@ class DATA:
         for name in self.protein_name:
             assert self.protein_name[name] == i
             i += 1
-            # g_f = np.concatenate([np.array(self.protein_dict[name]), np.array(self.local_dict[name])], axis=1)
-            # print(np.array(self.protein_dict[name]).shape)
-            # print(np.array(self.local_dict[name]).shape)
             self.x.append(self.protein_dict[name])
-            self.x_GO.append(self.prot_go_emb[name]) # go特征
+            self.x_GO.append(self.prot_go_emb[name])
             self.x_mask.append(self.prot_go_mask[name])
 
         self.x = np.array(self.x)
