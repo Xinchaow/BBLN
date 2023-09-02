@@ -6,10 +6,10 @@ from torch_geometric.nn import GINConv, GATConv
 from torch_geometric.nn import GCNConv, JumpingKnowledge, global_mean_pool, SAGEConv
 
 
-class PIE(torch.nn.Module):
+class ASE(torch.nn.Module):
 
     def __init__(self, in_feature, in_len):
-        super(PIE, self).__init__()
+        super(ASE, self).__init__()
         self.conv1d = nn.Conv1d(in_channels=in_feature, out_channels=1, kernel_size=3, padding=0)
         self.bn1 = nn.BatchNorm1d(1)
         self.biGRU = nn.GRU(1, 1, bidirectional=True, batch_first=True, num_layers=1)
@@ -30,25 +30,19 @@ class PIE(torch.nn.Module):
         return x
 
 
-class TransformerGO(nn.Module):
+class GSE(torch.nn.Module):
     def __init__(self, d_model, nhead, num_layers, dim_feedforward, dropout=0.1):
-        super().__init__()
+        super(GSE, self).__init__()
 
-        # encoder
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dropout=dropout,
                                                    dim_feedforward=dim_feedforward)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-        # last linear layer
         self.linear = nn.Linear(d_model, 512)
 
-    # batch  * max_seq_len * node2vec_dim
     def forward(self, emb_proteinA, protA_mask):
         memory = self.transformer_encoder(emb_proteinA, src_key_padding_mask=protA_mask)
 
-        # output: seqLen * batch * embDim
-
-        # transform B * seqLen * node2vec_dim --> B * node2vec_dim (TransformerCPI paper)
         output = memory.permute(1, 0, 2)
         output_c = torch.linalg.norm(output, dim=2)
         output_c = F.softmax(output_c, dim=1).unsqueeze(1)
@@ -66,8 +60,8 @@ class BBLN(torch.nn.Module):
         self.train_eps = train_eps
         self.feature_fusion = feature_fusion
         
-        self.transformer = TransformerGO(64, 2, 2, 64, 0.2)
-        self.PIE = PIE(seq_in_feature, seq_in_len)
+        self.GSE = GSE(64, 2, 2, 64, 0.2)
+        self.ASE = ASE(seq_in_feature, seq_in_len)
 
         self.gin_conv1 = GINConv(
             nn.Sequential(
@@ -111,10 +105,10 @@ class BBLN(torch.nn.Module):
 
 
     def forward(self, x_seq, x_GO, x_mask, edge_index, train_edge_id, p=0.5):
-        x_seq = self.PIE(x_seq)
+        x_seq = self.ASE(x_seq)
 
         x_GO = x_GO.permute(1, 0, 2)
-        x_GO = self.transformer(x_GO, x_mask)
+        x_GO = self.GSE(x_GO, x_mask)
 
         x_seq_cl = x_seq
         x_GO_cl = x_GO
