@@ -16,13 +16,14 @@ from tqdm import tqdm
 from utils import UnionFindSet, get_bfs_sub_graph, get_dfs_sub_graph
 from torch_geometric.data import Data, Dataset, InMemoryDataset, DataLoader
 
+go_terms_path = "protein_GO_terms.json"
+go_embs_path = "protein_GO_emb.json"
 
-device = 'cuda:0'
 
-with open('protein_GO_terms.json', 'r') as file:
+with open(go_terms_path, 'r') as file:
     tfprotdict = json.load(file)
 
-with open('protein_GO_emb.json', 'r') as file:
+with open(go_embs_path, 'r') as file:
     protein_go_emb = json.load(file)
 
 
@@ -42,11 +43,11 @@ def embed_normal(seq, dim, max_len):
 class DATA:
     def __init__(self, ppi_path, exclude_protein_path=None, max_len=2000, skip_head=True, p1_index=0, p2_index=1,
                  label_index=2, graph_undirection=True, bigger_ppi_path=None):
-        self.ppi_list = []  # 数据集中每个ppi对应的两个蛋白质,形如:[[蛋白质A,蛋白质B],[蛋白质A，蛋白质C],[蛋白质B,蛋白质C],...]
-        self.ppi_dict = {}  # 数据集中每个ppi对应编号的字典,key为蛋白质名_蛋白质名,value为对应编号(1,2,3...)
-        self.ppi_label_list = []  # 数据集中每个ppi对应的标签文件,其中之一的元素例如[1,0,1,1,1,0,0]
-        self.protein_dict = {}  # 数据集中的每个蛋白质的氨基酸序列,其中每个氨基酸以向量形式表达,key为蛋白质名,value为蛋白质对应的氨基酸序列
-        self.protein_name = {}  # 数据集中的蛋白质名称,key为蛋白质名,value为对应编号(1,2,3...)
+        self.ppi_list = []
+        self.ppi_dict = {}
+        self.ppi_label_list = []
+        self.protein_dict = {}
+        self.protein_name = {}
         self.ppi_path = ppi_path
         self.bigger_ppi_path = bigger_ppi_path
         self.max_len = max_len
@@ -146,7 +147,6 @@ class DATA:
                     temp_label[class_map[line[label_index]]] = 1
                     self.ppi_label_list[index] = temp_label
 
-        # 获取ppi_list
         i = 0
         for ppi in tqdm(self.ppi_dict.keys()):
             name = self.ppi_dict[ppi]
@@ -166,7 +166,6 @@ class DATA:
             self.ppi_list[i][0] = self.protein_name[seq1_name]
             self.ppi_list[i][1] = self.protein_name[seq2_name]
 
-        # 无向图
         if graph_undirection:
             for i in tqdm(range(ppi_num)):
                 temp_ppi = self.ppi_list[i][::-1]
@@ -197,7 +196,6 @@ class DATA:
             self.prot_go_emb[p_name] = emb
             self.prot_go_mask[p_name] = emb_mask
 
-    # 获取蛋白质序列
     def get_protein_aac(self, pseq_path):
         # aac: amino acid sequences
         self.pseq_path = pseq_path
@@ -223,7 +221,7 @@ class DATA:
         return seq
 
     def vectorize(self, vec_path):
-        self.acid2vec = {}  # 每个氨基酸对应的向量字典: "A":"[-1.545, 0.8, ... , 1, 0, 0,..., 0]"
+        self.acid2vec = {}
         self.dim = None
         for line in open(vec_path):
             line = line.strip().split('\t')
@@ -234,7 +232,7 @@ class DATA:
                 self.dim = len(temp)
         print("acid vector dimension: {}".format(self.dim))
 
-        self.pvec_dict = {} # 每个蛋白质的氨基酸以向量形式存放的字典: "蛋白质名":"[[氨基酸1的向量形式],[氨基酸2的向量形式],...]"
+        self.pvec_dict = {}
 
         for p_name in tqdm(self.pseq_dict.keys()):
             temp_seq = self.pseq_dict[p_name]
@@ -249,11 +247,11 @@ class DATA:
             self.pvec_dict[p_name] = temp_vec
 
     def get_feature_origin(self, pseq_path, vec_path):
-        self.get_protein_aac(pseq_path)  # 给self.pseq_dict赋值,该字典中保存了所有的蛋白质对应的氨基酸序列
+        self.get_protein_aac(pseq_path)
 
-        self.vectorize(vec_path)  # 对self.pvec_dict赋值,该字典保存了所有蛋白质对应的氨基酸序列(氨基酸以向量形式)
+        self.vectorize(vec_path)
 
-        self.protein_dict = {}  # 对数据集中的蛋白质对应的氨基酸序列进行向量化,保存在self.protein_dict中
+        self.protein_dict = {}
         for name in tqdm(self.protein_name.keys()):
             self.protein_dict[name] = self.pvec_dict[name]
 
@@ -275,26 +273,26 @@ class DATA:
         self.edge_index = torch.tensor(ppi_list, dtype=torch.long)
         self.edge_attr = torch.tensor(ppi_label_list, dtype=torch.long)
         self.x = []
-        self.x_GO = []
-        self.x_mask = []
+        self.x_go = []
+        self.go_mask = []
         i = 0
         for name in self.protein_name:
             assert self.protein_name[name] == i
             i += 1
             self.x.append(self.protein_dict[name])
-            self.x_GO.append(self.prot_go_emb[name])
-            self.x_mask.append(self.prot_go_mask[name])
+            self.x_go.append(self.prot_go_emb[name])
+            self.go_mask.append(self.prot_go_mask[name])
 
         self.x = np.array(self.x)
         self.x = torch.tensor(self.x, dtype=torch.float)
-        self.x_GO = np.array(self.x_GO)
-        self.x_GO = torch.tensor(self.x_GO, dtype=torch.float, device=device)
-        mask_list = [aa.tolist() for aa in self.x_mask]
-        self.x_mask = torch.tensor(mask_list, dtype=torch.bool, device=device)
+        self.x_go = np.array(self.x_go)
+        self.x_go = torch.tensor(self.x_go, dtype=torch.float)
+        mask_list = [aa.tolist() for aa in self.go_mask]
+        self.go_mask = torch.tensor(mask_list, dtype=torch.bool)
 
         self.data = Data(x=self.x, edge_index=self.edge_index.T, edge_attr_1=self.edge_attr)
 
-    def split_dataset(self, train_valid_index_path, test_size=0.2, random_new=False, mode='random'):
+    def split_dataset(self, train_valid_index_path, test_size=0.3, random_new=False, mode='random'):
         if random_new:
             if mode == 'random':
                 ppi_num = int(self.edge_num // 2)
