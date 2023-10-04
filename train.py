@@ -29,7 +29,7 @@ def sim(h1, h2):
     z2 = F.normalize(h2, dim=-1, p=2)
     return torch.mm(z1, z2.t())
 
-def contrastive_loss_wo_cross_view(h1, h2):
+def contrastive_loss_cross_view(h1, h2):
     f = lambda x: torch.exp(x)
     cross_sim = f(sim(h1, h2))
     return -torch.log(cross_sim.diag() / cross_sim.sum(dim=-1))
@@ -62,15 +62,12 @@ parser.add_argument('--epochs', default=2000, type=int,
                     help='train epoch number')
 
 
-def train(model, graph, x_GO, x_mask, ppi_list, loss_fn, optimizer, device,
+def train(model, graph, x_go, go_mask, ppi_list, loss_fn, optimizer, device,
           result_file_path, summary_writer, save_path,
-          batch_size=512, epochs=1000, scheduler=None,
-          got=False):
+          batch_size=512, epochs=1000, scheduler=None):
     global_step = 0
     global_best_valid_f1 = 0.0
     global_best_valid_f1_epoch = 0
-
-    truth_edge_num = graph.edge_index.shape[1] // 2
 
     for epoch in range(epochs):
 
@@ -84,7 +81,6 @@ def train(model, graph, x_GO, x_mask, ppi_list, loss_fn, optimizer, device,
         model.train()
 
         random.shuffle(graph.train_mask)
-        random.shuffle(graph.train_mask_got)
 
         for step in range(steps):
             if step == steps - 1:
@@ -92,13 +88,13 @@ def train(model, graph, x_GO, x_mask, ppi_list, loss_fn, optimizer, device,
             else:
                 train_edge_id = graph.train_mask[step * batch_size: step * batch_size + batch_size]
 
-            output, x_seq_cl, x_go_cl = model(graph.x, x_GO, x_mask, graph.edge_index, train_edge_id)
+            output, x_seq_cl, x_go_cl = model(graph.x, x_go, go_mask, graph.edge_index, train_edge_id)
 
             label = graph.edge_attr_1[train_edge_id]
 
             label = label.type(torch.FloatTensor).to(device)
 
-            cmc_loss = 0.5 * contrastive_loss_wo_cross_view(x_seq_cl, x_go_cl) + 0.5 * contrastive_loss_wo_cross_view(x_go_cl, x_seq_cl)
+            cmc_loss = 0.5 * contrastive_loss_cross_view(x_seq_cl, x_go_cl) + 0.5 * contrastive_loss_cross_view(x_go_cl, x_seq_cl)
             cmc_loss = cmc_loss.mean()
 
             cls_loss = loss_fn(output, label)
@@ -149,7 +145,7 @@ def train(model, graph, x_GO, x_mask, ppi_list, loss_fn, optimizer, device,
                 else:
                     valid_edge_id = graph.val_mask[step * batch_size: step * batch_size + batch_size]
 
-                output, _, _ = model(graph.x, x_GO, x_mask, graph.edge_index, valid_edge_id)
+                output, _, _ = model(graph.x, x_go, go_mask, graph.edge_index, valid_edge_id)
                 label = graph.edge_attr_1[valid_edge_id]
                 label = label.type(torch.FloatTensor).to(device)
 
@@ -219,8 +215,8 @@ def main():
     print("----------------------- Done split train and valid index -------------------")
 
     graph = ppi_data.data
-    x_GO = ppi_data.x_GO
-    x_mask = ppi_data.x_mask
+    x_go = ppi_data.x_go
+    go_mask = ppi_data.go_mask
 
     ppi_list = ppi_data.ppi_list
 
@@ -229,14 +225,12 @@ def main():
 
     print("train gnn, train_num: {}, valid_num: {}".format(len(graph.train_mask), len(graph.val_mask)))
 
-    graph.edge_index_got = torch.cat((graph.edge_index[:, graph.train_mask], graph.edge_index[:, graph.train_mask][[1, 0]]), dim=1)
-    graph.edge_attr_got = torch.cat((graph.edge_attr_1[graph.train_mask], graph.edge_attr_1[graph.train_mask]), dim=0)
-    graph.train_mask_got = [i for i in range(len(graph.train_mask))]
-
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(device)
 
     graph.to(device)
+    x_go = x_go.to(device)
+    go_mask = go_mask.to(device)
 
     model = BBLN(seq_in_len=2000, seq_in_feature=13, gin_in_feature=512, num_layers=1).to(device)
 
@@ -252,7 +246,7 @@ def main():
     if not os.path.exists(args.save_path):
         os.mkdir(args.save_path)
 
-    time_stamp = time.strftime("%Y-%m-%d-%H-%M-%S")
+    time_stamp = time.strftime("%Y_%m_%d_%H_%M_%S")
     save_path = os.path.join(args.save_path, "gnn_{}_{}".format(args.description, time_stamp))
     result_file_path = os.path.join(save_path, "valid_results.txt")
     config_path = os.path.join(save_path, "config.txt")
@@ -268,10 +262,9 @@ def main():
 
     summary_writer = SummaryWriter(save_path)
 
-    train(model, graph, x_GO, x_mask, ppi_list, loss_fn, optimizer, device,
+    train(model, graph, x_go, go_mask, ppi_list, loss_fn, optimizer, device,
           result_file_path, summary_writer, save_path,
-          batch_size=args.batch_size, epochs=args.epochs, scheduler=scheduler,
-          got=args.graph_only_train)
+          batch_size=args.batch_size, epochs=args.epochs, scheduler=scheduler)
 
     summary_writer.close()
 
