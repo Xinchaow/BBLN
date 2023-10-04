@@ -2,8 +2,8 @@ import torch
 import math
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GINConv, GATConv
-from torch_geometric.nn import GCNConv, JumpingKnowledge, global_mean_pool, SAGEConv
+from torch_geometric.nn import GINConv
+from torch_geometric.nn import JumpingKnowledge
 
 
 class ASE(torch.nn.Module):
@@ -15,7 +15,7 @@ class ASE(torch.nn.Module):
         self.biGRU = nn.GRU(1, 1, bidirectional=True, batch_first=True, num_layers=1)
         self.maxpool1d = nn.MaxPool1d(3, stride=3)
         self.global_avgpool1d = nn.AdaptiveAvgPool1d(1)
-        self.fc1 = nn.Linear(math.floor(in_len / 3), 512)  # 原版
+        self.fc1 = nn.Linear(math.floor(in_len / 3), 512)
 
     def forward(self, x):
         x = x.transpose(1, 2)
@@ -31,7 +31,7 @@ class ASE(torch.nn.Module):
 
 
 class GSE(torch.nn.Module):
-    def __init__(self, d_model, nhead, num_layers, dim_feedforward, dropout=0.1):
+    def __init__(self, d_model=64, nhead=2, num_layers=2, dim_feedforward=64, dropout=0.1):
         super(GSE, self).__init__()
 
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dropout=dropout,
@@ -59,8 +59,8 @@ class BBLN(torch.nn.Module):
         self.use_jk = use_jk
         self.train_eps = train_eps
         self.feature_fusion = feature_fusion
-        
-        self.GSE = GSE(64, 2, 2, 64, 0.2)
+
+        self.GSE = GSE()
         self.ASE = ASE(seq_in_feature, seq_in_len)
 
         self.gin_conv1 = GINConv(
@@ -94,70 +94,71 @@ class BBLN(torch.nn.Module):
         self.lin2 = nn.Linear(hidden, hidden)
         self.lin2_go = nn.Linear(hidden, hidden)
 
-        self.mlp_cl = nn.Sequential(nn.Linear(512, hidden), nn.ReLU(), nn.Linear(hidden, hidden), nn.ReLU(), nn.Dropout(), nn.BatchNorm1d(hidden))
-        
-        self.fca = nn.Linear(512*2, 512)
+        self.mlp_cl = nn.Sequential(nn.Linear(512, hidden), nn.ReLU(), nn.Linear(hidden, hidden), nn.ReLU(),
+                                    nn.Dropout(), nn.BatchNorm1d(hidden))
+
+        self.fca = nn.Linear(512 * 2, 512)
         self.fc3 = nn.Linear(512, class_num)
 
+        self.cls = nn.Sequential(nn.Linear(hidden * 2, hidden), nn.ReLU(), nn.Linear(hidden, hidden), nn.ReLU(), nn.BatchNorm1d(hidden), nn.Linear(hidden, class_num))
+
         self.eps = nn.Parameter(torch.Tensor([1.0]))
-        self.eps1 = nn.Parameter(torch.Tensor([1.0]))
+        self.eps1 = nn.Parameter(torch.Tensor([0.5]))
         self.bn_fuse = nn.BatchNorm1d(512)
 
-
-    def forward(self, x_seq, x_GO, x_mask, edge_index, train_edge_id, p=0.5):
+    def forward(self, x_seq, x_go, go_mask, edge_index, train_edge_id, p=0.5):
         x_seq = self.ASE(x_seq)
 
-        x_GO = x_GO.permute(1, 0, 2)
-        x_GO = self.GSE(x_GO, x_mask)
+        x_go = x_go.permute(1, 0, 2)
+        x_go = self.GSE(x_go, go_mask)
 
         x_seq_cl = x_seq
-        x_GO_cl = x_GO
-        
+        x_go_cl = x_go
+
         x_seq_gin = x_seq
-        x_GO_gin = x_GO
+        x_go_gin = x_go
 
         x_seq_gin = self.gin_conv1(x_seq_gin, edge_index)
-        x_GO_gin = self.gin_conv1_GO(x_GO_gin, edge_index)
+        x_go_gin = self.gin_conv1_GO(x_go_gin, edge_index)
 
         x_seq_gin = F.relu(self.lin1(x_seq_gin))
         x_seq_gin = F.dropout(x_seq_gin, p=p, training=self.training)
         x_seq_gin = self.lin2(x_seq_gin)
-        x_GO_gin = F.relu(self.lin1_go(x_GO_gin))
-        x_GO_gin = F.dropout(x_GO_gin, p=p, training=self.training)
-        x_GO_gin = self.lin2_go(x_GO_gin)
+        x_go_gin = F.relu(self.lin1_go(x_go_gin))
+        x_go_gin = F.dropout(x_go_gin, p=p, training=self.training)
+        x_go_gin = self.lin2_go(x_go_gin)
 
         node_id = edge_index[:, train_edge_id]
-        
+
         x1_seq_gin = x_seq_gin[node_id[0]]
         x2_seq_gin = x_seq_gin[node_id[1]]
-        x1_GO_gin = x_GO_gin[node_id[0]]
-        x2_GO_gin = x_GO_gin[node_id[1]]
+        x1_go_gin = x_go_gin[node_id[0]]
+        x2_go_gin = x_go_gin[node_id[1]]
 
         x1_seq_cl = x_seq_cl[node_id[0]]
         x2_seq_cl = x_seq_cl[node_id[1]]
-        x1_GO_cl = x_GO_cl[node_id[0]]
-        x2_GO_cl = x_GO_cl[node_id[1]]
+        x1_go_cl = x_go_cl[node_id[0]]
+        x2_go_cl = x_go_cl[node_id[1]]
 
         x_seq_ppi = torch.mul(x1_seq_gin, x2_seq_gin)
-        x_GO_ppi = torch.mul(x1_GO_gin, x2_GO_gin)
-        
+        x_go_ppi = torch.mul(x1_go_gin, x2_go_gin)
+
         x_seq_cl_ppi = torch.mul(x1_seq_cl, x2_seq_cl)
-        x_GO_cl_ppi = torch.mul(x1_GO_cl, x2_GO_cl)
+        x_go_cl_ppi = torch.mul(x1_go_cl, x2_go_cl)
 
         x_seq_cl_ppi = self.mlp_cl(x_seq_cl_ppi)
-        x_GO_cl_ppi = self.mlp_cl(x_GO_cl_ppi)
-        
-        x_cl_modal1 = x_seq_cl_ppi.clone().detach()
-        x_cl_modal2 = x_GO_cl_ppi.clone().detach()
+        x_go_cl_ppi = self.mlp_cl(x_go_cl_ppi)
 
-        x1 = torch.cat([x_seq_ppi, x_GO_ppi], dim=1)
+        x_cl_modal1 = x_seq_cl_ppi.clone().detach()
+        x_cl_modal2 = x_go_cl_ppi.clone().detach()
+
+        x1 = torch.cat([x_seq_ppi, x_go_ppi], dim=1)
         x2 = torch.cat([x_cl_modal1, x_cl_modal2], dim=1)
 
-        x = self.eps*(x1) + self.eps1*(x2)
- 
+        x = self.eps * x1 + self.eps1 * x2
+
         x = self.fca(x)
         x = self.fc3(x)
+        # x = self.cls(x)
 
-        return x, x_seq_cl_ppi, x_GO_cl_ppi
-
-
+        return x, x_seq_cl_ppi, x_go_cl_ppi
